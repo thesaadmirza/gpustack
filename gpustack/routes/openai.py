@@ -117,12 +117,23 @@ async def proxy_request_by_model(
             message="Model not found",
             is_openai_exception=True,
         )
-    models: List[Model] = await ModelRouteService(
-        session
-    ).get_model_ids_by_model_route_name(model_name)
+    model_route_service = ModelRouteService(session)
+    models: List[Model] = await model_route_service.get_model_ids_by_model_route_name(
+        model_name
+    )
     if len(models) == 0:
-        raise NotFoundException(
-            message="Model not found or no running instances available",
+        # get_model_ids_by_model_route_name filters on TargetStateEnum.ACTIVE, so
+        # an empty result means either no such route or every target sitting
+        # UNAVAILABLE while ready_replicas is 0 (any worker that misses /healthz
+        # does that to every model on it). 404 would tell the caller a deployed
+        # model is gone and not to retry, so split them.
+        if await model_route_service.get_by_name(model_name) is None:
+            raise NotFoundException(
+                message="Model not found",
+                is_openai_exception=True,
+            )
+        raise ServiceUnavailableException(
+            message="No running instances available",
             is_openai_exception=True,
         )
     request.state.stream = stream
